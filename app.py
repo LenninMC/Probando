@@ -1,45 +1,23 @@
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
-from werkzeug.security import check_password_hash, generate_password_hash
-import socket
+from werkzeug.security import check_password_hash
 import json
+import os
 
-# --- CONFIGURACIÓN DE AUTENTICACIÓN ---
-# Para generar un hash de tu contraseña, usa en Python:
-# from werkzeug.security import generate_password_hash
-# print(generate_password_hash("tu_contraseña"))
+# Configuración
 APP_USER = "admin"
-APP_PW_HASH = "scrypt:32768:8:1$8xVnLZqW9YpK2xRt$8d9f2a1b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t1u2v3w4x5y6z7a8b9c0d"  # Reemplazar con hash real
-SECRET_KEY = "clave-secreta-muy-larga-y-aleatoria-para-sesiones"
-# ------------------------------------
+# Genera tu hash con: from werkzeug.security import generate_password_hash; print(generate_password_hash("tu_password"))
+APP_PW_HASH = "scrypt:32768:8:1$K2xRt8vNlZqW9YpX$8d9f2a1b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t1u2v3w4x5y6z7a8b9c0d"
+SECRET_KEY = "clave-secreta-para-sesiones-cambiar-en-produccion"
 
-TCP_HOST = "127.0.0.1"
-TCP_PORT = 5001
+# Archivo compartido con el estado del motor
+STATE_FILE = "/tmp/motor_state.json"
+CMD_FILE = "/tmp/motor_cmd.txt"
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
 
 def is_logged_in():
     return session.get("logged_in") is True
-
-def send_cmd(cmd: str) -> str:
-    """Envía un comando TCP y devuelve la respuesta."""
-    try:
-        with socket.create_connection((TCP_HOST, TCP_PORT), timeout=2) as s:
-            s.sendall((cmd + "\n").encode("utf-8"))
-            return s.recv(1024).decode("utf-8", errors="ignore").strip()
-    except Exception as e:
-        return f"ERR:{str(e)}"
-
-def send_control_cmd(cmd: str) -> bool:
-    """Envía un comando de control al Arduino (A, R, P, Z)."""
-    try:
-        with socket.create_connection((TCP_HOST, TCP_PORT), timeout=2) as s:
-            s.sendall((cmd + "\n").encode("utf-8"))
-            response = s.recv(1024).decode("utf-8", errors="ignore").strip()
-            return response.startswith("OK")
-    except Exception as e:
-        print(f"Error enviando comando {cmd}: {e}")
-        return False
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -65,34 +43,23 @@ def index():
 
 @app.get("/api/estado")
 def get_estado():
-    """Devuelve el estado actual del motor."""
+    """Devuelve el estado actual del motor desde el archivo compartido"""
     if not is_logged_in():
         return jsonify({"ok": False, "error": "No autorizado"}), 401
-
-    resp = send_cmd("GET_STATE")
-    # Se espera "COMANDO:A,ESTADO:ADELANTE,PULSOS:1234,VUELTAS:0.3856,RPM:1250.50"
+    
     try:
-        partes = resp.split(",")
-        comando = partes[0].split(":")[1]
-        estado = partes[1].split(":")[1]
-        pulsos = int(partes[2].split(":")[1])
-        vueltas = float(partes[3].split(":")[1])
-        rpm = float(partes[4].split(":")[1])
-        
-        return jsonify({
-            "ok": True,
-            "comando": comando,
-            "estado": estado,
-            "pulsos": pulsos,
-            "vueltas": vueltas,
-            "rpm": rpm
-        })
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, 'r') as f:
+                estado = json.load(f)
+            return jsonify({"ok": True, **estado})
+        else:
+            return jsonify({"ok": False, "error": "No hay datos del motor"})
     except Exception as e:
-        return jsonify({"ok": False, "error": f"Respuesta inválida: {resp}"})
+        return jsonify({"ok": False, "error": str(e)})
 
 @app.post("/api/comando")
 def enviar_comando():
-    """Envía un comando al motor (A=Adelante, R=Atrás, P=Paro, Z=Reset)."""
+    """Envía un comando al motor escribiendo en el archivo compartido"""
     if not is_logged_in():
         return jsonify({"ok": False, "error": "No autorizado"}), 401
     
@@ -102,10 +69,17 @@ def enviar_comando():
     if cmd not in ["A", "R", "P", "Z"]:
         return jsonify({"ok": False, "error": "Comando inválido"})
     
-    if send_control_cmd(cmd):
+    try:
+        # Escribir comando en archivo para que lo lea el servidor TCP
+        with open(CMD_FILE, 'w') as f:
+            f.write(cmd)
         return jsonify({"ok": True, "mensaje": f"Comando {cmd} enviado"})
-    else:
-        return jsonify({"ok": False, "error": "Error al enviar comando"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 
 if __name__ == "__main__":
+    print("=== APLICACIÓN WEB ===")
+    print("Servidor Flask iniciando...")
+    print("Accede a: http://localhost:5000")
+    print("======================")
     app.run(host="0.0.0.0", port=5000, debug=True)

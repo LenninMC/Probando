@@ -1,94 +1,137 @@
-import socket
 import serial
 import threading
 import time
+import json
+import os
 
-# --- CONFIGURACIÓN ---
-SERIAL_PORT = "/dev/ttyACM0"   # Ajusta según tu sistema (ej. COM3 en Windows)
+# Configuración
+SERIAL_PORT = "/dev/ttyACM0"  # Cambia a COM3 en Windows
 BAUDRATE = 115200
-HOST = "0.0.0.0"
-PORT = 5001
-# ----------------------
 
-# Variables globales para el estado
-ultimo_comando = 'P'
-ultimo_estado = "PARADO"
-ultimos_pulsos = 0
-ultimas_vueltas = 0.0
-ultimas_rpm = 0.0
-lock = threading.Lock()
+# Archivos compartidos
+STATE_FILE = "/tmp/motor_state.json"
+CMD_FILE = "/tmp/motor_cmd.txt"
+
+# Variable global para el estado
+estado_actual = {
+    "comando": "P",
+    "estado": "PARADO",
+    "pulsos": 0,
+    "vueltas": 0.0,
+    "rpm": 0.0
+}
+
+def guardar_estado():
+    """Guarda el estado actual en archivo JSON"""
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(estado_actual, f)
+    except Exception as e:
+        print(f"Error guardando estado: {e}")
 
 def leer_serial(ser):
-    """Hilo que lee continuamente del serial y actualiza los valores."""
-    global ultimo_comando, ultimo_estado, ultimos_pulsos, ultimas_vueltas, ultimas_rpm
+    """Hilo que lee continuamente del serial"""
+    global estado_actual
     
     while True:
         try:
-            linea = ser.readline().decode('utf-8', errors='ignore').strip()
-            if linea:
-                print(f"Serial: {linea}")  # Debug
-            
-            # Formato esperado: "COMANDO:A,ESTADO:ADELANTE,PULSOS:1234,VUELTAS:0.3856,RPM:1250.50"
-            if linea.startswith("COMANDO:") and ",ESTADO:" in linea:
-                partes = linea.split(",")
-                if len(partes) >= 5:
-                    try:
-                        with lock:
-                            ultimo_comando = partes[0].split(":")[1]
-                            ultimo_estado = partes[1].split(":")[1]
-                            ultimos_pulsos = int(partes[2].split(":")[1])
-                            ultimas_vueltas = float(partes[3].split(":")[1])
-                            ultimas_rpm = float(partes[4].split(":")[1])
-                        print(f"Actualizado - Estado: {ultimo_estado}, RPM: {ultimas_rpm:.2f}")
-                    except (ValueError, IndexError) as e:
-                        print(f"Error parseando datos: {e}")
-                        
+            if ser.in_waiting:
+                linea = ser.readline().decode('utf-8', errors='ignore').strip()
+                
+                if linea:
+                    print(f"Serial: {linea}")
+                
+                # Formato esperado: COMANDO:A,ESTADO:ADELANTE,PULSOS:1234,VUELTAS:0.3856,RPM:1250.50
+                if linea.startswith("COMANDO:") and ",ESTADO:" in linea:
+                    partes = linea.split(",")
+                    if len(partes) >= 5:
+                        try:
+                            estado_actual = {
+                                "comando": partes[0].split(":")[1],
+                                "estado": partes[1].split(":")[1],
+                                "pulsos": int(partes[2].split(":")[1]),
+                                "vueltas": float(partes[3].split(":")[1]),
+                                "rpm": float(partes[4].split(":")[1])
+                            }
+                            guardar_estado()
+                            print(f"✓ Estado actualizado - RPM: {estado_actual['rpm']:.2f}")
+                        except (ValueError, IndexError) as e:
+                            print(f"Error parseando: {e}")
+                
+                # Respuesta a comandos
+                elif linea.startswith("OK:"):
+                    print(f"Comando ejecutado: {linea}")
+                    
         except Exception as e:
-            print(f"Error serial: {e}")
+            print(f"Error en lectura serial: {e}")
             time.sleep(0.1)
 
+def enviar_comandos(ser):
+    """Hilo que lee comandos del archivo y los envía al Arduino"""
+    ultimo_comando = ""
+    
+    while True:
+        try:
+            # Verificar si hay archivo de comando
+            if os.path.exists(CMD_FILE):
+                with open(CMD_FILE, 'r') as f:
+                    comando = f.read().strip()
+                
+                # Si hay un comando nuevo
+                if comando and comando != ultimo_comando:
+                    print(f"Enviando comando: {comando}")
+                    ser.write((comando + "\n").encode())
+                    ultimo_comando = comando
+                    
+                    # Limpiar archivo después de leer
+                    with open(CMD_FILE, 'w') as f:
+                        f.write("")
+                        
+        except Exception as e:
+            print(f"Error enviando comando: {e}")
+        
+        time.sleep(0.1)
+
 def main():
+    print("=== SERVIDOR TCP SIMPLIFICADO ===")
+    print(f"Puerto serial: {SERIAL_PORT}")
+    print(f"Baud rate: {BAUDRATE}")
+    print(f"Archivo estado: {STATE_FILE}")
+    print(f"Archivo comandos: {CMD_FILE}")
+    print("==================================")
+    
     try:
-        ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=0.5)
-        print(f"Conectado a Arduino en {SERIAL_PORT} a {BAUDRATE} baudios")
-    except Exception as e:
-        print(f"Error al abrir puerto serial: {e}")
-        return
-
-    # Iniciar hilo de lectura serial
-    hilo_serial = threading.Thread(target=leer_serial, args=(ser,), daemon=True)
-    hilo_serial.start()
-
-    # Crear socket TCP
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind((HOST, PORT))
-        s.listen(5)
-        print(f"Servidor TCP escuchando en {HOST}:{PORT}...")
-
+        # Conectar al Arduino
+        ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=1)
+        print(f"✓ Conectado a Arduino en {SERIAL_PORT}")
+        
+        # Inicializar archivos
+        guardar_estado()
+        if not os.path.exists(CMD_FILE):
+            with open(CMD_FILE, 'w') as f:
+                f.write("")
+        
+        # Iniciar hilos
+        hilo_lectura = threading.Thread(target=leer_serial, args=(ser,), daemon=True)
+        hilo_lectura.start()
+        
+        hilo_comandos = threading.Thread(target=enviar_comandos, args=(ser,), daemon=True)
+        hilo_comandos.start()
+        
+        print("✓ Servidor funcionando correctamente")
+        print("Presiona Ctrl+C para detener\n")
+        
+        # Mantener el programa corriendo
         while True:
-            conn, addr = s.accept()
-            with conn:
-                print(f"Conexión desde {addr}")
-                data = conn.recv(1024)
-                if not data:
-                    continue
-
-                cmd = data.decode("utf-8", errors="ignore").strip().upper()
-                
-                if cmd == "GET_STATE":
-                    with lock:
-                        respuesta = f"COMANDO:{ultimo_comando},ESTADO:{ultimo_estado},PULSOS:{ultimos_pulsos},VUELTAS:{ultimas_vueltas:.4f},RPM:{ultimas_rpm:.2f}"
-                    conn.sendall((respuesta + "\n").encode("utf-8"))
-                
-                elif cmd in ["A", "R", "P", "Z"]:
-                    # Enviar comando al Arduino
-                    ser.write((cmd + "\n").encode())
-                    conn.sendall(b"OK\n")
-                    print(f"Comando enviado: {cmd}")
-                
-                else:
-                    conn.sendall(b"ERR:CMD\n")
+            time.sleep(1)
+            
+    except serial.SerialException as e:
+        print(f"✗ Error abriendo puerto serial: {e}")
+        print(f"Verifica que el Arduino esté conectado y el puerto sea correcto")
+    except KeyboardInterrupt:
+        print("\nDeteniendo servidor...")
+    except Exception as e:
+        print(f"Error inesperado: {e}")
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control Motor DC con Encoder</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="dashboard">
+        <!-- Barra superior -->
+        <div class="top-bar">
+            <div class="logo">
+                <span class="logo-icon">🔄</span>
+                <span class="logo-text">CONTROL DE MOTOR CON ENCODER</span>
+            </div>
+            <div class="system-status">
+                <span class="status-indicator"></span>
+                <span class="status-text">Sistema activo</span>
+            </div>
+            <a href="/logout" class="logout-link">⏻ Cerrar sesión</a>
+        </div>
+
+        <div class="main-content">
+            <!-- Panel izquierdo -->
+            <div>
+                <!-- Tarjeta de estado del motor -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>🔧 ESTADO DEL MOTOR</h3>
+                        <span class="badge">Puente H L298N</span>
+                    </div>
+                    <div class="estado-value" id="estado-motor" style="font-size: 36px;">---</div>
+                    <div class="estado-range">Motor DC con encoder</div>
+                    <div class="motor-status">
+                        <div class="motor-info">
+                            <span class="motor-label">Pulsos encoder:</span>
+                            <span><span id="pulsos-valor" class="motor-value">0</span><span class="motor-unit">pulsos</span></span>
+                        </div>
+                        <div class="motor-info">
+                            <span class="motor-label">Vueltas:</span>
+                            <span><span id="vueltas-valor" class="motor-value">0.0000</span><span class="motor-unit">rev</span></span>
+                        </div>
+                        <div class="motor-info">
+                            <span class="motor-label">Velocidad angular:</span>
+                            <span><span id="rpm-valor" class="motor-value">0.00</span><span class="motor-unit">RPM</span></span>
+                        </div>
+                        <div class="motor-bar-container">
+                            <div class="motor-bar" id="rpm-bar"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tarjeta de control -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>🎮 CONTROL MANUAL</h3>
+                        <span class="badge">Comandos en tiempo real</span>
+                    </div>
+                    <div class="motor-status">
+                        <div class="control-buttons">
+                            <button class="control-btn adelante" onclick="enviarComando('A')">▶ ADELANTE</button>
+                            <button class="control-btn atras" onclick="enviarComando('R')">◀ ATRÁS</button>
+                            <button class="control-btn paro" onclick="enviarComando('P')">⏹ PARO</button>
+                            <button class="control-btn reset" onclick="enviarComando('Z')">🔄 RESET</button>
+                        </div>
+                        <div class="info-row" style="margin-top: 15px;">
+                            <span class="info-label">Velocidad PWM:</span>
+                            <span class="info-value">180 / 255 (70.6%)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tarjeta de información -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>🔌 INFORMACIÓN DEL SISTEMA</h3>
+                    </div>
+                    <div class="info-grid">
+                        <div class="info-row">
+                            <span class="info-label">Última actualización:</span>
+                            <span id="ultima-actualizacion" class="info-value">--:--:--</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Encoder CPR:</span>
+                            <span class="info-value">3200 pulsos/rev</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Velocidad PWM:</span>
+                            <span class="info-value">180 (fija)</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Pines motor:</span>
+                            <span class="info-value">IN1=7, IN2=8, EN=9</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Pines encoder:</span>
+                            <span class="info-value">A=2, B=3</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Panel derecho - Gráfica -->
+            <div>
+                <div class="card" style="height: 100%;">
+                    <div class="card-header">
+                        <h3>📈 MONITOREO EN TIEMPO REAL</h3>
+                        <div>
+                            <span class="badge">RPM</span>
+                            <span class="badge">Pulsos</span>
+                            <span class="badge">Actualización 500ms</span>
+                        </div>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="mainChart"></canvas>
+                    </div>
+                    <div class="chart-footer">
+                        <div class="chart-legend">
+                            <div class="legend-item">
+                                <span class="legend-color rpm"></span> RPM
+                            </div>
+                            <div class="legend-item">
+                                <span class="legend-color blue"></span> Pulsos del encoder
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuración
+        const VELOCIDAD_MAX = 180;
+        const RPM_MAX = 3000;
+
+        // Elementos DOM
+        const estadoMotor = document.getElementById('estado-motor');
+        const pulsosValor = document.getElementById('pulsos-valor');
+        const vueltasValor = document.getElementById('vueltas-valor');
+        const rpmValor = document.getElementById('rpm-valor');
+        const rpmBar = document.getElementById('rpm-bar');
+        const ultimaActualizacion = document.getElementById('ultima-actualizacion');
+
+        // Configuración de la gráfica
+        const ctx = document.getElementById('mainChart').getContext('2d');
+        let chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'RPM',
+                        data: [],
+                        borderColor: '#00ff9d',
+                        backgroundColor: 'rgba(0, 255, 157, 0.1)',
+                        borderWidth: 2,
+                        pointRadius: 3,
+                        pointHoverRadius: 5,
+                        tension: 0.3,
+                        fill: true,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Pulsos',
+                        data: [],
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        borderWidth: 2,
+                        pointRadius: 3,
+                        pointHoverRadius: 5,
+                        tension: 0.3,
+                        fill: true,
+                        yAxisID: 'y1'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { mode: 'index', intersect: false }
+                },
+                scales: {
+                    y: {
+                        position: 'left',
+                        title: { display: true, text: 'RPM', color: '#8d9db0' },
+                        grid: { color: 'rgba(255,255,255,0.1)' },
+                        ticks: { color: '#8d9db0' },
+                        min: 0,
+                        max: RPM_MAX
+                    },
+                    y1: {
+                        position: 'right',
+                        title: { display: true, text: 'Pulsos', color: '#8d9db0' },
+                        grid: { display: false },
+                        ticks: { color: '#8d9db0' }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#8d9db0', maxRotation: 45, minRotation: 45 }
+                    }
+                }
+            }
+        });
+
+        function updateChart(rpm, pulsos) {
+            const ahora = new Date().toLocaleTimeString();
+            
+            chart.data.labels.push(ahora);
+            chart.data.datasets[0].data.push(rpm);
+            chart.data.datasets[1].data.push(pulsos);
+            
+            if (chart.data.labels.length > 30) {
+                chart.data.labels.shift();
+                chart.data.datasets[0].data.shift();
+                chart.data.datasets[1].data.shift();
+            }
+            
+            chart.update();
+        }
+
+        function actualizarUI(estado) {
+            if (!estado) return;
+            
+            let estadoTexto = "";
+            let estadoColor = "";
+            
+            switch(estado.estado) {
+                case "ADELANTE":
+                    estadoTexto = "▶ ADELANTE";
+                    estadoColor = "#00ff9d";
+                    break;
+                case "ATRAS":
+                    estadoTexto = "◀ ATRÁS";
+                    estadoColor = "#ff6b6b";
+                    break;
+                case "PARADO":
+                    estadoTexto = "⏹ PARADO";
+                    estadoColor = "#ffaa00";
+                    break;
+                default:
+                    estadoTexto = "---";
+                    estadoColor = "#5f6b7a";
+            }
+            
+            estadoMotor.textContent = estadoTexto;
+            estadoMotor.style.color = estadoColor;
+            
+            pulsosValor.textContent = estado.pulsos || 0;
+            vueltasValor.textContent = estado.vueltas ? estado.vueltas.toFixed(4) : "0.0000";
+            rpmValor.textContent = estado.rpm ? estado.rpm.toFixed(2) : "0.00";
+            
+            const porcentajeRPM = Math.min((estado.rpm || 0) / RPM_MAX * 100, 100);
+            rpmBar.style.width = `${porcentajeRPM}%`;
+            
+            updateChart(estado.rpm || 0, estado.pulsos || 0);
+        }
+
+        async function fetchEstado() {
+            try {
+                const r = await fetch("/api/estado");
+                const j = await r.json();
+                
+                if (j.ok) {
+                    actualizarUI(j);
+                    const ahora = new Date();
+                    ultimaActualizacion.textContent = `${ahora.toLocaleDateString()} ${ahora.toLocaleTimeString()}`;
+                } else {
+                    console.error('Error en datos:', j.error);
+                }
+            } catch (error) {
+                console.error('Error de conexión:', error);
+            }
+        }
+
+        async function enviarComando(cmd) {
+            try {
+                const r = await fetch("/api/comando", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ comando: cmd })
+                });
+                const j = await r.json();
+                
+                if (j.ok) {
+                    console.log(`Comando ${cmd} enviado correctamente`);
+                    setTimeout(fetchEstado, 100);
+                } else {
+                    console.error('Error al enviar comando:', j.error);
+                }
+            } catch (error) {
+                console.error('Error de conexión:', error);
+            }
+        }
+
+        setInterval(fetchEstado, 500);
+        fetchEstado();
+    </script>
+</body>
+</html>

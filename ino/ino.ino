@@ -70,14 +70,49 @@ void leerSerial() {
   while (Serial.available() > 0) {
     char c = Serial.read();
 
-    if (c == 'A' || c == 'a') comando = 'A';
-    else if (c == 'R' || c == 'r') comando = 'R';
-    else if (c == 'P' || c == 'p') comando = 'P';
+    if (c == 'A' || c == 'a') {
+      comando = 'A';
+      Serial.println("OK:ADELANTE");
+    }
+    else if (c == 'R' || c == 'r') {
+      comando = 'R';
+      Serial.println("OK:ATRAS");
+    }
+    else if (c == 'P' || c == 'p') {
+      comando = 'P';
+      Serial.println("OK:PARO");
+    }
     else if (c == 'Z' || c == 'z') {
       noInterrupts();
       contador = 0;
       conteoAnterior = 0;
       interrupts();
+      Serial.println("OK:RESET");
+    }
+    else if (c == 'G') {
+      // Comando GET_STATE
+      long c;
+      noInterrupts();
+      c = contador;
+      interrupts();
+      
+      float vueltas = (float)c / CPR;
+      String estadoMotor = "";
+      
+      if (comando == 'A') estadoMotor = "ADELANTE";
+      else if (comando == 'R') estadoMotor = "ATRAS";
+      else estadoMotor = "PARADO";
+      
+      Serial.print("COMANDO:");
+      Serial.print(comando);
+      Serial.print(",ESTADO:");
+      Serial.print(estadoMotor);
+      Serial.print(",PULSOS:");
+      Serial.print(c);
+      Serial.print(",VUELTAS:");
+      Serial.print(vueltas, 4);
+      Serial.print(",RPM:");
+      Serial.println(rpm, 2);
     }
   }
 }
@@ -104,7 +139,7 @@ void enviarDatos() {
   static unsigned long lastSend = 0;
   unsigned long ahora = millis();
 
-  if (ahora - lastSend >= 200) {
+  if (ahora - lastSend >= 500) {
     lastSend = ahora;
 
     long c;
@@ -119,7 +154,7 @@ void enviarDatos() {
     else if (comando == 'R') estadoMotor = "ATRAS";
     else estadoMotor = "PARADO";
 
-    // Formato para el servidor TCP
+    // Formato para el servidor
     Serial.print("COMANDO:");
     Serial.print(comando);
     Serial.print(",ESTADO:");
@@ -129,16 +164,6 @@ void enviarDatos() {
     Serial.print(",VUELTAS:");
     Serial.print(vueltas, 4);
     Serial.print(",RPM:");
-    Serial.println(rpm, 2);
-    
-    // Debug
-    Serial.print("  -> [");
-    Serial.print(estadoMotor);
-    Serial.print("] Pulsos: ");
-    Serial.print(c);
-    Serial.print(" | Vueltas: ");
-    Serial.print(vueltas, 4);
-    Serial.print(" | RPM: ");
     Serial.println(rpm, 2);
   }
 }
@@ -163,7 +188,7 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(pinB), encoderISR, CHANGE);
 
   Serial.println("=== SISTEMA DE CONTROL CON ENCODER ===");
-  Serial.println("A=Adelante  R=Atras  P=Paro  Z=Reset");
+  Serial.println("Comandos: A=Adelante R=Atras P=Paro Z=Reset");
   Serial.println("=======================================");
 }
 
@@ -186,35 +211,4 @@ void loop() {
 
   calcularRPM();
   enviarDatos();
-  
-  // Procesar comandos GET_STATE del servidor TCP
-  if (Serial.available()) {
-    String cmd = Serial.readStringUntil('\n');
-    cmd.trim();
-    
-    if (cmd == "GET_STATE") {
-      long c;
-      noInterrupts();
-      c = contador;
-      interrupts();
-      
-      float vueltas = (float)c / CPR;
-      String estadoMotor = "";
-      
-      if (comando == 'A') estadoMotor = "ADELANTE";
-      else if (comando == 'R') estadoMotor = "ATRAS";
-      else estadoMotor = "PARADO";
-      
-      Serial.print("COMANDO:");
-      Serial.print(comando);
-      Serial.print(",ESTADO:");
-      Serial.print(estadoMotor);
-      Serial.print(",PULSOS:");
-      Serial.print(c);
-      Serial.print(",VUELTAS:");
-      Serial.print(vueltas, 4);
-      Serial.print(",RPM:");
-      Serial.println(rpm, 2);
-    }
-  }
 }
